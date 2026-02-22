@@ -55,13 +55,22 @@ void setup() {
     digitalWrite(RELAY_PINS[i], LOW);  // Start with relays OFF
   }
   
+  // Initialize DIP switch pins as inputs
+  pinMode(DIP_SWITCH_PIN_1, INPUT_PULLUP);
+  pinMode(DIP_SWITCH_PIN_2, INPUT_PULLUP);
+  
+  // Initialize DMX timeout tracking
+  lastDMXReceived = millis();
+  
   // Initialize Serial for debugging (optional)
   Serial.begin(115200);
   delay(100);
   Serial.println("DMX Power Control Initialized");
   Serial.println("Start Address: 365");
   Serial.println("Relays on pins 26-29");
+  Serial.println("DIP Switch Override on pins 30-31");
   Serial.println("Using Conceptinetics DMX Library - Slave Mode");
+  Serial.println("DMX Timeout: 5 minutes");
   
   // Enable DMX slave mode on Serial3
   dmx_slave.enable();
@@ -74,6 +83,15 @@ void setup() {
 // MAIN LOOP
 // ============================================================================
 void loop() {
+  // Check for valid DMX frame reception
+  if (dmx_slave.isFrameReceived()) {
+    lastDMXReceived = millis();
+    dmxSignalActive = true;
+  }
+  
+  // Check for DMX timeout
+  checkDMXTimeout();
+  
   // Update each relay based on corresponding DMX channel value
   updateRelays();
   
@@ -108,5 +126,23 @@ void updateRelays() {
 void turnOffAllRelays() {
   for (int i = 0; i < NUM_RELAYS; i++) {
     digitalWrite(RELAY_PINS[i], LOW);
+  }
+}
+
+// ============================================================================
+// DMX TIMEOUT HANDLING
+// ============================================================================
+void checkDMXTimeout() {
+  unsigned long currentTime = millis();
+  unsigned long timeSinceLastDMX = currentTime - lastDMXReceived;
+  
+  // Check if DIP switch 1 is ON (override safety - LOW when switch is ON with pullup)
+  boolean safetyOverride = !digitalRead(DIP_SWITCH_PIN_1);
+  
+  // If DMX signal has been lost for 5 minutes AND safety override is not enabled
+  if (timeSinceLastDMX > DMX_TIMEOUT && !safetyOverride && dmxSignalActive) {
+    Serial.println("DMX timeout: No signal for 5 minutes. Turning off all relays.");
+    turnOffAllRelays();
+    dmxSignalActive = false;
   }
 }
