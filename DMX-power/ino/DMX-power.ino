@@ -2,7 +2,7 @@
  * DMX Power Control - Arduino Mega 2560
  * 
  * This sketch controls 4 relays via DMX protocol using a CQrobot DMX Shield
- * with the Conceptinetics DMX library
+ * with the DMXSerial library
  * DMX Start Address: 365
  * Relay Pins: 26-29
  * 
@@ -17,7 +17,10 @@
  * - >= 128: Relay ON
  */
 
-#include <Conceptinetics.h>
+// Configure DMXSerial to use Serial1 (RX on pin 19, TX on pin 18)
+#define DMXSERIAL_USE_PORT1
+
+#include <DMXSerial.h>
 
 // ============================================================================
 // PIN CONFIGURATION
@@ -35,15 +38,19 @@ const int DMX_START_ADDRESS = 365;
 const int DMX_THRESHOLD = 128;  // Values >= 128 turn relay ON, < 128 turn OFF
 const unsigned long DMX_TIMEOUT = 5 * 60 * 1000;  // 5 minutes in milliseconds
 
-// Conceptinetics DMX library instance - Slave mode (receiver)
-// Uses Serial3 on Arduino Mega (RX on pin 15, TX on pin 14)
-DMX_Slave dmx_slave(512, 3);  // 512 channels, Serial3
+// DMXSerial will use Serial1 on Arduino Mega
+// Serial1 RX on pin 19, TX on pin 18
 
 // ============================================================================
 // TIMING AND STATE VARIABLES
 // ============================================================================
 unsigned long lastDMXReceived = 0;  // Timestamp of last valid DMX frame
 boolean dmxSignalActive = false;    // Flag indicating if DMX signal is currently active
+byte lastChannelValue[4] = {0, 0, 0, 0};  // Track last channel values to detect changes
+
+// Timing for relay update loop
+unsigned long lastRelayUpdate = 0;
+const unsigned long RELAY_UPDATE_INTERVAL = 50;  // milliseconds
 
 // ============================================================================
 // SETUP
@@ -61,6 +68,7 @@ void setup() {
   
   // Initialize DMX timeout tracking
   lastDMXReceived = millis();
+  lastRelayUpdate = millis();
   
   // Initialize Serial for debugging (optional)
   Serial.begin(115200);
@@ -69,33 +77,31 @@ void setup() {
   Serial.println("Start Address: 365");
   Serial.println("Relays on pins 26-29");
   Serial.println("DIP Switch Override on pins 30-31");
-  Serial.println("Using Conceptinetics DMX Library - Slave Mode");
+  Serial.println("Using DMXSerial Library - Receiver Mode on Serial1");
   Serial.println("DMX Timeout: 5 minutes");
+  Serial.println("Non-blocking architecture enabled");
   
-  // Enable DMX slave mode on Serial3
-  dmx_slave.enable();
+  // Initialize DMXSerial in receiver mode on Serial1
+  // For Serial1 on Mega: RX=19, TX=18
+  DMXSerial.init(DMXReceiver);
   
   delay(100);
-  Serial.println("DMX Slave enabled and waiting for DMX signal...");
+  Serial.println("DMX Receiver initialized on Serial1 and waiting for DMX signal...");
 }
 
 // ============================================================================
 // MAIN LOOP
 // ============================================================================
 void loop() {
-  // Check for valid DMX frame reception
-  if (dmx_slave.isFrameReceived()) {
-    lastDMXReceived = millis();
-    dmxSignalActive = true;
-  }
-  
-  // Check for DMX timeout
+  // Check for DMX timeout (non-blocking)
   checkDMXTimeout();
   
-  // Update each relay based on corresponding DMX channel value
-  updateRelays();
-  
-  delay(50);  // Update relays every 50ms
+  // Update relays at specified interval (non-blocking with timing check)
+  unsigned long currentTime = millis();
+  if (currentTime - lastRelayUpdate >= RELAY_UPDATE_INTERVAL) {
+    lastRelayUpdate = currentTime;
+    updateRelays();
+  }
 }
 
 // ============================================================================
@@ -103,13 +109,21 @@ void loop() {
 // ============================================================================
 void updateRelays() {
   // Update each relay based on corresponding DMX channel value
+  boolean dataChanged = false;
+  
   for (int i = 0; i < NUM_RELAYS; i++) {
     int dmxChannel = DMX_START_ADDRESS + i;
-    byte dmxValue = dmx_slave.getChannelValue(dmxChannel);
+    byte dmxValue = DMXSerial.read(dmxChannel);
     
     // Determine relay state based on DMX value
     boolean relayState = (dmxValue >= DMX_THRESHOLD);
     digitalWrite(RELAY_PINS[i], relayState ? HIGH : LOW);
+    
+    // Check if any channel value has changed
+    if (dmxValue != lastChannelValue[i]) {
+      lastChannelValue[i] = dmxValue;
+      dataChanged = true;
+    }
     
     // Debug output (uncomment to enable)
     // Serial.print("Relay ");
@@ -120,6 +134,12 @@ void updateRelays() {
     // Serial.print(dmxValue);
     // Serial.print(" -> ");
     // Serial.println(relayState ? "ON" : "OFF");
+  }
+  
+  // If any DMX channel value changed, update the last received timestamp
+  if (dataChanged) {
+    lastDMXReceived = millis();
+    dmxSignalActive = true;
   }
 }
 
